@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sam-app
+
+  Sample SAM Template for sam-app
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+  BikeAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      
+      Auth:
+        Authorizers:
+            CognitoAuthorizer:
+              UserPoolArn: !GetAtt "CognitoUserPool.Arn"
+
+  ProductsTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: Products
+      AttributeDefinitions:
+        -
+          AttributeName: id
+          AttributeType: S
+      KeySchema:
+        -
+          AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  OrdersTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: Orders
+      AttributeDefinitions:
+      -
+        AttributeName: id
+        AttributeType: S
+      KeySchema:
+      -
+        AttributeName: id
+        KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  InventoryTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: Inventory
+      AttributeDefinitions:
+      -
+        AttributeName: id
+        AttributeType: S
+      KeySchema:
+      -
+        AttributeName: id
+        KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+        
+  GetProductsFunction:
+    Type: AWS::Serverless::Function 
+    Properties:
+      CodeUri: handlers/get_products
+      Handler: get_products.lambda_handler
+      #Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LambdaApplicationRoleSam'
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      - DynamoDBReadPolicy:
+            TableName: Products
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Events:
+        GetProducts:
+          Type: Api 
+          Properties:
+            RestApiId: !Ref BikeAPI
+            Path: /get_products
+            Method: get
+            
+  GetOrdersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: handlers/get_orders
+      Handler: get_orders.lambda_handler
+      #Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LambdaApplicationRoleSam'
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      - DynamoDBReadPolicy: #added this role due to issues with permissions; i think it was one of the 500 errors
+          TableName: !Ref OrdersTable
+      Runtime: python3.12
+      Architectures:
+      - x86_64
+      Events:
+        GetOrders:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BikeAPI
+            Path: /orders
+            Method: get
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  GetOrderDetailsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: handlers/get_order
+      Handler: get_order.lambda_handler
+      Runtime: python3.12
+      Architectures:
+      - x86_64
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      - DynamoDBReadPolicy: #added this role due to issues with permissions
+          TableName: !Ref OrdersTable
+      #Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LambdaApplicationRoleSam'
+      
+      Events:
+        GetOrderDetails:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BikeAPI
+            Path: /orders/{order_id}
+            Method: get
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  CreateOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: handlers/create_order
+      Handler: create_order.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      - DynamoDBCrudPolicy: #added this role due to issues with permissions
+          TableName: !Ref OrdersTable
+      
+      #Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LambdaApplicationRoleSam'
+      
+      Events:
+        CreateOrder:
+          Type: Api
+          Properties:
+            RestApiId: !Ref BikeAPI
+            Path: /orders
+            Method: post
+
+  GenerateReportDataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: handlers/generate_report_data
+      Handler: generate_report_data.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      # Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LambdaApplicationRoleSam'
+
+  GenerateHTMLFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: handlers/generate_html
+      Handler: generate_html.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      #Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LambdaApplicationRoleSam'
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: bike_app
+      UsernameAttributes:
+        - email
+      UsernameConfiguration:
+        CaseSensitive: false
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      AutoVerifiedAttributes:
+        - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+            AllowAdminCreateUserOnly: true
+      
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: bike_app_client
+      UserPoolId: !Ref CognitoUserPool
+      AccessTokenValidity: 5
+      IdTokenValidity: 1
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+      AllowedOAuthFlowsUserPoolClient: true  
+      AllowedOAuthFlows:
+        - implicit
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - aws.cognito.signin.user.admin
+      CallbackURLs:
+        - http://localhost:8080 # REPLACE WITH BIKE APP URL
+      LogoutURLs:
+        - http://localhost:8080 # REPLACE WITH BIKE APP URL
+      SupportedIdentityProviders:
+        - COGNITO
+
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "bike-app-domain-auth-${AWS::AccountId}"
+      UserPoolId: !Ref CognitoUserPool
+
+Outputs:
+  MicroserviceApi:
+    Description: "API Gateway endpoint URL for Prod stage"
+    Value: !Sub "https://${BikeAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+  GetProductsFunction:
+    Description: "Get_Products Lambda Function ARN"
+    Value: !GetAtt GetProductsFunction.Arn
+  EndpointForGetProducts:
+    Description: "API Gateway endpoint URL for Prod stage for Get_Products function"
+    Value: !Sub "https://${BikeAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod/get_products"
+  EndpointForGetOrders:
+      Description: "API Gateway endpoint URL for Prod stage for Get Order History"
+      Value: !Sub "https://${BikeAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod/orders"
+  EndpointForGetOrderDetails:
+    Description: "API Gateway endpoint URL for Prod stage for Get Order Details"
+    Value: !Sub "https://${BikeAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod/orders/{order_id}"
+  EndpointForCreateOrder:
+    Description: "API Gateway endpoint URL for Prod stage for Create Order"
+    Value: !Sub "https://${BikeAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod/orders"
+  CognitoUserPoolId:
+    Description: "Cognito User Pool ID"
+    Value: !Ref CognitoUserPool
+  CognitoUserPoolClientId:
+    Description: "Cognito User Pool Client ID"
+    Value: !Ref CognitoUserPoolClient
+  CognitoUserPoolDomain:
+    Description: "Cognito User Pool Domain"
+    Value: !Ref CognitoUserPoolDomain
